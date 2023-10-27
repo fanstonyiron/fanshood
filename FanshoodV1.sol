@@ -20,6 +20,10 @@ contract FanshoodV1 is Ownable {
 
     mapping(address => FanshoodData.BookOption) public bookHoods;
 
+    mapping(address => uint256) public  subjectPump;
+
+    mapping(address => uint256) public  subjectIndex;
+
     mapping(address => uint256) public hoodsSupply;
 
     constructor(address _fanshoodAdmin) Ownable(msg.sender){
@@ -40,19 +44,23 @@ contract FanshoodV1 is Ownable {
         subjectFeePercent = _feePercent;
     }
 
-    function getPrice(uint256 supply, uint256 amount) public pure returns (uint256) {
+    function getPrice(uint256 supply, uint256 amount, uint256 index) public pure returns (uint256) {
         uint256 sum1 = supply == 0 ? 0 : (supply - 1) * (supply) * (2 * (supply - 1) + 1) / 6;
         uint256 sum2 = supply == 0 && amount == 1 ? 0 : (supply - 1 + amount) * (supply + amount) * (2 * (supply - 1 + amount) + 1) / 6;
         uint256 summation = sum2 - sum1;
-        return summation * 1 ether / 16000;
+        return summation * 1 ether * 1e18 / index;
+    }
+
+    function getIndex(address hoodsSubject) public view returns (uint256)  {
+        return subjectIndex[hoodsSubject] == 0 ? 16000 * 1e18 : subjectIndex[hoodsSubject];
     }
 
     function getBuyPrice(address hoodsSubject, uint256 amount) public view returns (uint256) {
-        return getPrice(hoodsSupply[hoodsSubject], amount);
+        return getPrice(hoodsSupply[hoodsSubject], amount, getIndex(hoodsSubject));
     }
 
     function getSellPrice(address hoodsSubject, uint256 amount) public view returns (uint256) {
-        return getPrice(hoodsSupply[hoodsSubject] - amount, amount);
+        return getPrice(hoodsSupply[hoodsSubject] - amount, amount, getIndex(hoodsSubject));
     }
 
     function getBuyPriceAfterFee(address hoodsSubject, uint256 amount) public view returns (uint256) {
@@ -75,7 +83,7 @@ contract FanshoodV1 is Ownable {
         require(supply > 0 || amount == 1, "Only buy one for the first time");
         FanshoodData.BookOption memory bookhood = bookHoods[hoodsSubject];
         require(!bookhood.isBook || block.timestamp > bookhood.openTime, "Pre-release hood is not open buy");
-        uint256 price = getPrice(supply, amount);
+        uint256 price = getPrice(supply, amount, getIndex(hoodsSubject));
         uint256 protocolFee = price * protocolFeePercent / 1 ether;
         uint256 subjectFee = price * subjectFeePercent / 1 ether;
         require(msg.value >= price + protocolFee + subjectFee, "Insufficient payment");
@@ -100,7 +108,7 @@ contract FanshoodV1 is Ownable {
         require(MerkleProof.verify(_proof, bookhood.whitelistRoot, _leaf), "Not in the whitelist");
         require(hoodsBalance[hoodsSubject][msg.sender] + amount <= maxPreAmount, "Purchase quantity exceeds the maximum quantity limit");
 
-        uint256 price = getPrice(supply, amount);
+        uint256 price = getPrice(supply, amount, getIndex(hoodsSubject));
         uint256 protocolFee = price * protocolFeePercent / 1 ether;
         uint256 subjectFee = price * subjectFeePercent / 1 ether;
         require(msg.value >= price + protocolFee + subjectFee, "Insufficient payment");
@@ -133,7 +141,7 @@ contract FanshoodV1 is Ownable {
     function sellHoods(address hoodsSubject, uint256 amount) public payable {
         uint256 supply = hoodsSupply[hoodsSubject];
         require(supply > amount, "Cannot sell the last hood");
-        uint256 price = getPrice(supply - amount, amount);
+        uint256 price = getPrice(supply - amount, amount, getIndex(hoodsSubject));
         uint256 protocolFee = price * protocolFeePercent / 1 ether;
         uint256 subjectFee = price * subjectFeePercent / 1 ether;
         require(hoodsBalance[hoodsSubject][msg.sender] >= amount, "Insufficient hoods");
@@ -156,6 +164,18 @@ contract FanshoodV1 is Ownable {
         bookHoods[hoodsSubject] = bookhood;
     }
 
+    function pump(address hoodsSubject) public payable {
+        require(tx.origin == msg.sender && msg.sender == fanshoodAdmin, "Bad call");
+        uint256 supply = hoodsSupply[hoodsSubject];
+        require(supply > 1, "Hood supply must more than 1");
+        require(msg.value > 0.001 ether, "appreciate amount invalid");
+        subjectPump[hoodsSubject] = subjectPump[hoodsSubject] + msg.value;
+        uint256 sum = supply * (supply + 1) * (2 * supply + 1) / 6;
+        uint256 amount = sum * 1 ether / 16000;
+        uint256 index = (16000 * amount * 1e18) / (amount + subjectPump[hoodsSubject]);
+        subjectIndex[hoodsSubject] = index;
+    }
+
     function setFanshoodAdmin(address _fanshoodAdmin) public onlyOwner {
         fanshoodAdmin = _fanshoodAdmin;
     }
@@ -163,4 +183,5 @@ contract FanshoodV1 is Ownable {
     function setMaxPreAmount(uint256 _amount) public onlyOwner {
         maxPreAmount = _amount;
     }
+
 }
