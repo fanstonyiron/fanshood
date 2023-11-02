@@ -6,7 +6,10 @@ import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
 
 contract FanshoodV1 is Ownable {
     address public protocolFeeDestination;
+    address public rewardFeeDestination;
     uint256 public protocolFeePercent;
+    uint256 public buyRewardFeePercent;
+    uint256 public sellRewardFeePercent;
     uint256 public subjectFeePercent;
     address public fanshoodService;
     address public fanshoodAirdrop;
@@ -20,7 +23,7 @@ contract FanshoodV1 is Ownable {
         bytes32 whitelistRoot;
     }
 
-    event Trade(address trader, address subject, bool isBuy, uint256 hoodAmount, uint256 ethAmount, uint256 protocolEthAmount, uint256 subjectEthAmount, uint256 supply, uint256 tradeTime);
+    event Trade(address trader, address subject, bool isBuy, uint256 hoodAmount, uint256 ethAmount, uint256 protocolEthAmount, uint256 rewardEthAmount, uint256 subjectEthAmount, uint256 supply, uint256 tradeTime);
 
     event PreReleaseTrade(address subject, uint256 bookTime, uint256 openTime, uint256 tradeTime);
 
@@ -36,9 +39,13 @@ contract FanshoodV1 is Ownable {
 
     mapping(address => uint256) public hoodsSupply;
 
-    constructor(address _fanshoodService, address _fanshoodFinancial, address _fanshoodAirdrop) Ownable(msg.sender){
+    constructor(address _protocolFeeDestination, address _rewardFeeDestination, address _fanshoodService, address _fanshoodFinancial, address _fanshoodAirdrop) Ownable(msg.sender){
         protocolFeePercent = 50000000000000000;
         subjectFeePercent = 50000000000000000;
+        buyRewardFeePercent = 200000000000000000;
+        sellRewardFeePercent = 50000000000000000;
+        protocolFeeDestination = _protocolFeeDestination;
+        rewardFeeDestination = _rewardFeeDestination;
         fanshoodService = _fanshoodService;
         fanshoodFinancial = _fanshoodFinancial;
         fanshoodAirdrop = _fanshoodAirdrop;
@@ -48,12 +55,25 @@ contract FanshoodV1 is Ownable {
         protocolFeeDestination = _feeDestination;
     }
 
+    function setRewardFeeDestination(address _rewardFeeDestination) public onlyOwner {
+        rewardFeeDestination = _rewardFeeDestination;
+    }
+
     function setProtocolFeePercent(uint256 _feePercent) public onlyOwner {
         protocolFeePercent = _feePercent;
     }
 
+
     function setSubjectFeePercent(uint256 _feePercent) public onlyOwner {
         subjectFeePercent = _feePercent;
+    }
+
+    function setBuyRewardFeePercent(uint256 _buyRewardFeePercent) public onlyOwner {
+        buyRewardFeePercent = _buyRewardFeePercent;
+    }
+
+    function setSellRewardFeePercent(uint256 _sellRewardFeePercent) public onlyOwner {
+        sellRewardFeePercent = _sellRewardFeePercent;
     }
 
     function getPrice(uint256 supply, uint256 amount, uint256 index) public pure returns (uint256) {
@@ -90,6 +110,7 @@ contract FanshoodV1 is Ownable {
     }
 
     function buyHoods(address hoodsSubject, uint256 amount) public payable {
+        require(amount > 0, "amount invalid");
         uint256 supply = hoodsSupply[hoodsSubject];
         require(supply > 0 || hoodsSubject == msg.sender, "Only the hoods' subject can buy the first hood");
         require(supply > 0 || amount == 1, "Only buy one for the first time");
@@ -98,13 +119,16 @@ contract FanshoodV1 is Ownable {
         uint256 price = getPrice(supply, amount, getIndex(hoodsSubject));
         uint256 protocolFee = price * protocolFeePercent / 1 ether;
         uint256 subjectFee = price * subjectFeePercent / 1 ether;
+        uint256 rewardFee = protocolFee * buyRewardFeePercent / 1 ether;
+        uint256 finalProtocolFee = protocolFee - rewardFee;
         require(msg.value >= price + protocolFee + subjectFee, "Insufficient payment");
         hoodsBalance[hoodsSubject][msg.sender] = hoodsBalance[hoodsSubject][msg.sender] + amount;
         hoodsSupply[hoodsSubject] = supply + amount;
-        emit Trade(msg.sender, hoodsSubject, true, amount, price, protocolFee, subjectFee, supply + amount, block.timestamp);
-        (bool success1,) = protocolFeeDestination.call{value: protocolFee}("");
-        (bool success2,) = hoodsSubject.call{value: subjectFee}("");
-        require(success1 && success2, "Unable to send funds");
+        (bool success1,) = protocolFeeDestination.call{value: finalProtocolFee}("");
+        (bool success2,) = rewardFeeDestination.call{value: rewardFee}("");
+        (bool success3,) = hoodsSubject.call{value: subjectFee}("");
+        require(success1 && success2 && success3, "Unable to send funds");
+        emit Trade(msg.sender, hoodsSubject, true, amount, price, finalProtocolFee, rewardFee, subjectFee, supply + amount, block.timestamp);
     }
 
     function airdropByFanshood(address hoodsSubject, address[] calldata _addresses) public payable {
@@ -123,19 +147,23 @@ contract FanshoodV1 is Ownable {
             uint256 price = getPrice(supply, 1, getIndex(hoodsSubject));
             uint256 protocolFee = price * protocolFeePercent / 1 ether;
             uint256 subjectFee = price * subjectFeePercent / 1 ether;
+            uint256 rewardFee = protocolFee * buyRewardFeePercent / 1 ether;
+            uint256 finalProtocolFee = protocolFee - rewardFee;
             uint256 fee = price + protocolFee + subjectFee;
             require(amount >= fee, "Insufficient payment");
             hoodsBalance[hoodsSubject][_receiver] = hoodsBalance[hoodsSubject][_receiver] + 1;
             hoodsSupply[hoodsSubject] = supply + 1;
-            emit Trade(_receiver, hoodsSubject, true, 1, price, protocolFee, subjectFee, supply + 1, block.timestamp);
-            (bool success1,) = protocolFeeDestination.call{value: protocolFee}("");
-            (bool success2,) = hoodsSubject.call{value: subjectFee}("");
-            require(success1 && success2, "Unable to send funds");
+            (bool success1,) = protocolFeeDestination.call{value: finalProtocolFee}("");
+            (bool success2,) = rewardFeeDestination.call{value: rewardFee}("");
+            (bool success3,) = hoodsSubject.call{value: subjectFee}("");
+            require(success1 && success2 && success3, "Unable to send funds");
             amount = amount - fee;
+            emit Trade(_receiver, hoodsSubject, true, 1, price, finalProtocolFee, rewardFee, subjectFee, supply + 1, block.timestamp);
         }
     }
 
     function airdrop(address hoodsSubject, uint256 amount, bytes32[] calldata _proof) public payable {
+        require(amount > 0, "amount invalid");
         uint256 supply = hoodsSupply[hoodsSubject];
         BookOption memory bookhood = bookHoods[hoodsSubject];
         require(supply > 0 && bookhood.isBook, "The hood creator has not presold hood");
@@ -144,18 +172,20 @@ contract FanshoodV1 is Ownable {
         bytes32 _leaf = keccak256(abi.encodePacked(msg.sender));
         require(MerkleProof.verify(_proof, bookhood.whitelistRoot, _leaf), "Not in the whitelist");
         require(hoodsBalance[hoodsSubject][msg.sender] + amount <= maxPreAmount, "It has been exceeded the maximum number of hoods which are sold in advance");
-
         uint256 price = getPrice(supply, amount, getIndex(hoodsSubject));
         uint256 protocolFee = price * protocolFeePercent / 1 ether;
         uint256 subjectFee = price * subjectFeePercent / 1 ether;
+        uint256 rewardFee = protocolFee * buyRewardFeePercent / 1 ether;
+        uint256 finalProtocolFee = protocolFee - rewardFee;
         require(msg.value >= price + protocolFee + subjectFee, "Insufficient payment");
         hoodsBalance[hoodsSubject][msg.sender] = hoodsBalance[hoodsSubject][msg.sender] + amount;
         uint256 total = supply + amount;
         hoodsSupply[hoodsSubject] = total;
-        emit Trade(msg.sender, hoodsSubject, true, amount, price, protocolFee, subjectFee, total, block.timestamp);
-        (bool success1,) = protocolFeeDestination.call{value: protocolFee}("");
-        (bool success2,) = hoodsSubject.call{value: subjectFee}("");
-        require(success1 && success2, "Unable to send funds");
+        (bool success1,) = protocolFeeDestination.call{value: finalProtocolFee}("");
+        (bool success2,) = rewardFeeDestination.call{value: rewardFee}("");
+        (bool success3,) = hoodsSubject.call{value: subjectFee}("");
+        require(success1 && success2 && success3, "Unable to send funds");
+        emit Trade(msg.sender, hoodsSubject, true, amount, price, finalProtocolFee, rewardFee, subjectFee, total, block.timestamp);
     }
 
     function preRelease(uint256 bookTime, uint256 openTime, bytes32 whitelistRoot) public payable {
@@ -171,11 +201,12 @@ contract FanshoodV1 is Ownable {
             whitelistRoot: whitelistRoot
         });
         bookHoods[msg.sender] = bookOption;
-        emit Trade(msg.sender, msg.sender, true, 1, 0, 0, 0, 1, block.timestamp);
+        emit Trade(msg.sender, msg.sender, true, 1, 0, 0, 0, 0, 1, block.timestamp);
         emit PreReleaseTrade(msg.sender, bookTime, openTime, block.timestamp);
     }
 
     function sellHoods(address hoodsSubject, uint256 amount) public payable {
+        require(amount > 0, "amount invalid");
         uint256 supply = hoodsSupply[hoodsSubject];
         require(supply > amount, "Cannot sell the last hood");
         BookOption memory bookhood = bookHoods[hoodsSubject];
@@ -183,14 +214,17 @@ contract FanshoodV1 is Ownable {
         uint256 price = getPrice(supply - amount, amount, getIndex(hoodsSubject));
         uint256 protocolFee = price * protocolFeePercent / 1 ether;
         uint256 subjectFee = price * subjectFeePercent / 1 ether;
+        uint256 rewardFee = protocolFee * sellRewardFeePercent / 1 ether;
+        uint256 finalProtocolFee = protocolFee - rewardFee;
         require(hoodsBalance[hoodsSubject][msg.sender] >= amount, "Insufficient hoods");
         hoodsBalance[hoodsSubject][msg.sender] = hoodsBalance[hoodsSubject][msg.sender] - amount;
         hoodsSupply[hoodsSubject] = supply - amount;
-        emit Trade(msg.sender, hoodsSubject, false, amount, price, protocolFee, subjectFee, supply - amount, block.timestamp);
         (bool success1,) = msg.sender.call{value: price - protocolFee - subjectFee}("");
-        (bool success2,) = protocolFeeDestination.call{value: protocolFee}("");
-        (bool success3,) = hoodsSubject.call{value: subjectFee}("");
-        require(success1 && success2 && success3, "Unable to send funds");
+        (bool success2,) = protocolFeeDestination.call{value: finalProtocolFee}("");
+        (bool success3,) = rewardFeeDestination.call{value: rewardFee}("");
+        (bool success4,) = hoodsSubject.call{value: subjectFee}("");
+        require(success1 && success2 && success3 && success4, "Unable to send funds");
+        emit Trade(msg.sender, hoodsSubject, false, amount, price, finalProtocolFee, rewardFee, subjectFee, supply - amount, block.timestamp);
     }
 
     function pump(address hoodsSubject) public payable {
@@ -199,7 +233,7 @@ contract FanshoodV1 is Ownable {
         require(supply > 1, "Hood supply must more than 1");
         require(msg.value > 0.001 ether, "pump amount invalid");
         BookOption memory bookhood = bookHoods[hoodsSubject];
-        require(!bookhood.isBook || block.timestamp > bookhood.openTime, "Cannot pump amount during the pre-release period");
+        require(!bookhood.isBook || block.timestamp > bookhood.openTime, "Cannot pump amount during the pre release period");
         subjectPump[hoodsSubject] = subjectPump[hoodsSubject] + msg.value;
         uint256 sum = supply * (supply + 1) * (2 * supply + 1) / 6;
         uint256 amount = sum * 1 ether / 16000;
