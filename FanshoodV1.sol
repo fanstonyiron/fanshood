@@ -26,7 +26,7 @@ contract FanshoodV1 is Ownable, ReentrancyGuard {
 
     event Trade(address trader, address subject, bool isBuy, uint256 hoodAmount, uint256 ethAmount, uint256 protocolEthAmount, uint256 rewardEthAmount, uint256 subjectEthAmount, uint256 supply, uint256 tradeTime);
     event PreReleaseTrade(address subject, uint256 bookTime, uint256 openTime, uint256 tradeTime);
-    event Pump(address subject, uint256 pumpAmount, uint256 totalPumpAmount);
+    event Pump(address subject, uint256 pumpAmount, uint256 totalPumpAmount, uint256 pumpIndex);
 
     mapping(address => mapping(address => uint256)) public hoodsBalance;
     mapping(address => BookOption) public bookHoods;
@@ -244,7 +244,7 @@ contract FanshoodV1 is Ownable, ReentrancyGuard {
         uint256 amount = sum * 1 ether * 1e18 / lastIndex;
         uint256 index = (lastIndex * amount) / (amount + msg.value);
         subjectIndex[hoodsSubject] = index;
-        emit Pump(hoodsSubject, msg.value, subjectPump[hoodsSubject]);
+        emit Pump(hoodsSubject, msg.value, subjectPump[hoodsSubject], index);
     }
 
     function updateWhiteList(address hoodsSubject, bytes32 whitelistRoot) external {
