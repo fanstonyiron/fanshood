@@ -3,8 +3,9 @@ pragma solidity ^0.8.19;
 
 import "@openzeppelin/contracts/access/Ownable.sol";
 import "@openzeppelin/contracts/utils/cryptography/MerkleProof.sol";
+import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
-contract FanshoodV1 is Ownable {
+contract FanshoodV1 is Ownable, ReentrancyGuard {
     address public protocolFeeDestination;
     address public rewardFeeDestination;
     uint256 public protocolFeePercent;
@@ -24,19 +25,13 @@ contract FanshoodV1 is Ownable {
     }
 
     event Trade(address trader, address subject, bool isBuy, uint256 hoodAmount, uint256 ethAmount, uint256 protocolEthAmount, uint256 rewardEthAmount, uint256 subjectEthAmount, uint256 supply, uint256 tradeTime);
-
     event PreReleaseTrade(address subject, uint256 bookTime, uint256 openTime, uint256 tradeTime);
-
     event Pump(address subject, uint256 pumpAmount, uint256 totalPumpAmount);
 
     mapping(address => mapping(address => uint256)) public hoodsBalance;
-
     mapping(address => BookOption) public bookHoods;
-
     mapping(address => uint256) public  subjectPump;
-
     mapping(address => uint256) public  subjectIndex;
-
     mapping(address => uint256) public hoodsSupply;
 
     constructor(address _protocolFeeDestination, address _rewardFeeDestination, address _fanshoodService, address _fanshoodFinancial, address _fanshoodAirdrop) Ownable(msg.sender){
@@ -50,7 +45,6 @@ contract FanshoodV1 is Ownable {
         fanshoodFinancial = _fanshoodFinancial;
         fanshoodAirdrop = _fanshoodAirdrop;
     }
-
     function setFeeDestination(address _feeDestination) public onlyOwner {
         protocolFeeDestination = _feeDestination;
     }
@@ -62,7 +56,6 @@ contract FanshoodV1 is Ownable {
     function setProtocolFeePercent(uint256 _feePercent) public onlyOwner {
         protocolFeePercent = _feePercent;
     }
-
 
     function setSubjectFeePercent(uint256 _feePercent) public onlyOwner {
         subjectFeePercent = _feePercent;
@@ -77,8 +70,8 @@ contract FanshoodV1 is Ownable {
     }
 
     function getPrice(uint256 supply, uint256 amount, uint256 index) public pure returns (uint256) {
-        uint256 sum1 = supply == 0 ? 0 : (supply - 1) * (supply) * (2 * (supply - 1) + 1) / 6;
-        uint256 sum2 = supply == 0 && amount == 1 ? 0 : (supply - 1 + amount) * (supply + amount) * (2 * (supply - 1 + amount) + 1) / 6;
+        uint256 sum1 = supply * (supply + 1) * (2 * supply + 1) / 6;
+        uint256 sum2 = (supply + amount) * (supply + 1 + amount) * (2 * (supply + amount) + 1) / 6;
         uint256 summation = sum2 - sum1;
         return summation * 1 ether * 1e18 / index;
     }
@@ -109,7 +102,7 @@ contract FanshoodV1 is Ownable {
         return price - protocolFee - subjectFee;
     }
 
-    function buyHoods(address hoodsSubject, uint256 amount) public payable {
+    function buyHoods(address hoodsSubject, uint256 amount) public payable nonReentrant {
         require(amount > 0, "amount invalid");
         uint256 supply = hoodsSupply[hoodsSubject];
         require(supply > 0 || hoodsSubject == msg.sender, "Only the hoods' subject can buy the first hood");
@@ -191,7 +184,14 @@ contract FanshoodV1 is Ownable {
     function preRelease(uint256 bookTime, uint256 openTime, bytes32 whitelistRoot) public payable {
         require(tx.origin == msg.sender, "Only support EOA");
         require(bookTime > block.timestamp && openTime > block.timestamp && openTime > bookTime, "The time to begin presell hood is invalid");
-        require(hoodsSupply[msg.sender] == 0 && !bookHoods[msg.sender].isBook, "Has already preselled hood");
+        uint256 supply = hoodsSupply[msg.sender];
+        require(supply == 0 && !bookHoods[msg.sender].isBook, "Has already preselled hood");
+        uint256 price = getPrice(supply, 1, getIndex(msg.sender));
+        uint256 protocolFee = price * protocolFeePercent / 1 ether;
+        uint256 subjectFee = price * subjectFeePercent / 1 ether;
+        uint256 rewardFee = protocolFee * buyRewardFeePercent / 1 ether;
+        uint256 finalProtocolFee = protocolFee - rewardFee;
+        require(msg.value >= price + protocolFee + subjectFee, "Insufficient payment");
         hoodsBalance[msg.sender][msg.sender] = 1;
         hoodsSupply[msg.sender] = 1;
         BookOption memory bookOption = BookOption({
@@ -201,14 +201,18 @@ contract FanshoodV1 is Ownable {
             whitelistRoot: whitelistRoot
         });
         bookHoods[msg.sender] = bookOption;
-        emit Trade(msg.sender, msg.sender, true, 1, 0, 0, 0, 0, 1, block.timestamp);
+        (bool success1,) = protocolFeeDestination.call{value: finalProtocolFee}("");
+        (bool success2,) = rewardFeeDestination.call{value: rewardFee}("");
+        (bool success3,) = (msg.sender).call{value: subjectFee}("");
+        require(success1 && success2 && success3, "Unable to send funds");
+        emit Trade(msg.sender, msg.sender, true, 1, price, finalProtocolFee, rewardFee, subjectFee, supply + 1, block.timestamp);
         emit PreReleaseTrade(msg.sender, bookTime, openTime, block.timestamp);
     }
 
-    function sellHoods(address hoodsSubject, uint256 amount) public payable {
+    function sellHoods(address hoodsSubject, uint256 amount) public payable nonReentrant {
         require(amount > 0, "amount invalid");
         uint256 supply = hoodsSupply[hoodsSubject];
-        require(supply > amount, "Cannot sell the last hood");
+        require(supply >= amount, "Cannot sell the last hood");
         BookOption memory bookhood = bookHoods[hoodsSubject];
         require(!bookhood.isBook || block.timestamp > bookhood.openTime, "Cannot be sold during the pre release period");
         uint256 price = getPrice(supply - amount, amount, getIndex(hoodsSubject));
@@ -235,9 +239,10 @@ contract FanshoodV1 is Ownable {
         BookOption memory bookhood = bookHoods[hoodsSubject];
         require(!bookhood.isBook || block.timestamp > bookhood.openTime, "Cannot pump amount during the pre release period");
         subjectPump[hoodsSubject] = subjectPump[hoodsSubject] + msg.value;
+        uint256 lastIndex = getIndex(hoodsSubject);
         uint256 sum = supply * (supply + 1) * (2 * supply + 1) / 6;
-        uint256 amount = sum * 1 ether / 16000;
-        uint256 index = (16000 * amount * 1e18) / (amount + subjectPump[hoodsSubject]);
+        uint256 amount = sum * 1 ether * 1e18 / lastIndex;
+        uint256 index = (lastIndex * amount) / (amount + msg.value);
         subjectIndex[hoodsSubject] = index;
         emit Pump(hoodsSubject, msg.value, subjectPump[hoodsSubject]);
     }
